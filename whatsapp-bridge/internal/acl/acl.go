@@ -26,8 +26,13 @@ const (
 
 // Policy is the operator-controlled access policy as stored on disk.
 type Policy struct {
-	Mode      string   `json:"mode"`
-	JIDs      []string `json:"jids"`
+	Mode string   `json:"mode"`
+	JIDs []string `json:"jids"`
+
+	// SendJIDs lists chats the bridge may send to. Sending is a strictly
+	// narrower privilege than reading: a chat must be readable to be sendable,
+	// so revoking read access revokes the ability to write there too.
+	SendJIDs  []string `json:"send_jids"`
 	UpdatedAt string   `json:"updated_at,omitempty"`
 }
 
@@ -88,6 +93,7 @@ func (s *Store) Policy() Policy {
 	defer s.mu.RUnlock()
 	p := s.policy
 	p.JIDs = append([]string(nil), p.JIDs...)
+	p.SendJIDs = append([]string(nil), p.SendJIDs...)
 	return p
 }
 
@@ -142,10 +148,10 @@ func jidUser(jid string) string {
 	return jid
 }
 
-// matches reports whether pattern names the same chat as chatJID. Matching is
+// MatchJID reports whether pattern names the same chat as chatJID. Matching is
 // exact on the full JID or on the user part; substring matching is avoided so
 // that "1555" cannot match "91555".
-func matches(pattern, chatJID string) bool {
+func MatchJID(pattern, chatJID string) bool {
 	p := strings.TrimSpace(pattern)
 	if p == "" {
 		return false
@@ -156,20 +162,20 @@ func matches(pattern, chatJID string) bool {
 	return strings.EqualFold(jidUser(p), jidUser(chatJID))
 }
 
-// Allowed reports whether messages for chatJID may be persisted.
-//
-// An allowlist that is set but empty allows nothing: a policy that is switched
-// on but misconfigured fails closed rather than exposing every conversation.
-func (s *Store) Allowed(chatJID string) bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	found := false
-	for _, p := range s.policy.JIDs {
-		if matches(p, chatJID) {
-			found = true
-			break
+// matchAnyLocked reports whether chatJID matches any pattern in list.
+// The caller must hold s.mu.
+func (s *Store) matchAnyLocked(list []string, chatJID string) bool {
+	for _, p := range list {
+		if MatchJID(p, chatJID) {
+			return true
 		}
 	}
+	return false
+}
+
+// allowedLocked implements the read policy. The caller must hold s.mu.
+func (s *Store) allowedLocked(chatJID string) bool {
+	found := s.matchAnyLocked(s.policy.JIDs, chatJID)
 	switch s.policy.Mode {
 	case ModeAllowlist:
 		return found
@@ -178,6 +184,32 @@ func (s *Store) Allowed(chatJID string) bool {
 	default:
 		return true
 	}
+}
+
+// Allowed reports whether messages for chatJID may be persisted.
+//
+// An allowlist that is set but empty allows nothing: a policy that is switched
+// on but misconfigured fails closed rather than exposing every conversation.
+func (s *Store) Allowed(chatJID string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.allowedLocked(chatJID)
+}
+
+// CanSend reports whether the bridge may send to chatJID.
+//
+// Sending requires the chat to be readable as well. A conversation the operator
+// has not allowed the model to see is not one it may write to, so removing a
+// chat from the read policy also removes the ability to message it, and the
+// send list can never widen access on its own. Both checks run under a single
+// lock so a policy reload cannot be observed half-applied.
+func (s *Store) CanSend(chatJID string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if !s.allowedLocked(chatJID) {
+		return false
+	}
+	return s.matchAnyLocked(s.policy.SendJIDs, chatJID)
 }
 
 // NoteChat records that a conversation exists, so the control panel can list

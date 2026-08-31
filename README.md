@@ -126,6 +126,16 @@ The panel is the only writer. The model cannot change the policy:
   a model whose web tool only performs `GET` cannot alter it by visiting a URL;
 - the panel is never registered as an MCP server, so no tool call reaches it.
 
+Each chat has two independent permissions: **read** and **send**. Sending is a
+strictly narrower privilege - a chat must be readable to be sendable - so
+removing read access also removes the ability to message there, and the send
+list can never widen access on its own. The panel enforces this when saving and
+the bridge enforces it again when sending.
+
+The send gate lives in the bridge, in `SendMessage`, `SendReaction` and
+`CreatePoll`, rather than in the MCP tool surface. A caller that reaches the
+bridge API directly is refused just the same.
+
 The bridge keeps a roster (`roster.json`) of chats it has seen, so the panel can
 offer a conversation before you have allowed it. The roster holds a name, a JID
 and a timestamp - never message content.

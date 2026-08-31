@@ -126,3 +126,48 @@ func TestRosterRoundTrip(t *testing.T) {
 		t.Errorf("dm entry wrong: %+v", a)
 	}
 }
+
+func TestCanSend(t *testing.T) {
+	tests := []struct {
+		name    string
+		policy  Policy
+		chatJID string
+		want    bool
+	}{
+		{"readable and sendable",
+			Policy{Mode: ModeAllowlist, JIDs: []string{"1555"}, SendJIDs: []string{"1555"}}, "1555@s.whatsapp.net", true},
+		{"readable but not sendable",
+			Policy{Mode: ModeAllowlist, JIDs: []string{"1555"}}, "1555@s.whatsapp.net", false},
+
+		// The send list must never widen access on its own: a chat the read
+		// policy excludes cannot be written to even if it is listed to send.
+		{"send list cannot bypass read policy",
+			Policy{Mode: ModeAllowlist, JIDs: []string{"1555"}, SendJIDs: []string{"1999"}}, "1999@s.whatsapp.net", false},
+		{"blocklisted chat is never sendable",
+			Policy{Mode: ModeBlocklist, JIDs: []string{"1999"}, SendJIDs: []string{"1999"}}, "1999@s.whatsapp.net", false},
+
+		{"group send",
+			Policy{Mode: ModeAllowlist, JIDs: []string{"12036@g.us"}, SendJIDs: []string{"12036@g.us"}}, "12036@g.us", true},
+		{"mode off still needs an explicit send entry",
+			Policy{Mode: ModeOff}, "1555@s.whatsapp.net", false},
+		{"mode off with send entry",
+			Policy{Mode: ModeOff, SendJIDs: []string{"1555"}}, "1555@s.whatsapp.net", true},
+
+		// The old gate used strings.Contains, which authorised "91555" from an
+		// entry of "1555". That is the regression this guards.
+		{"no suffix match on send",
+			Policy{Mode: ModeOff, SendJIDs: []string{"1555"}}, "91555@s.whatsapp.net", false},
+		{"no prefix match on send",
+			Policy{Mode: ModeOff, SendJIDs: []string{"1555"}}, "15551234@s.whatsapp.net", false},
+		{"empty send list sends nowhere",
+			Policy{Mode: ModeOff}, "1555@s.whatsapp.net", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newStore(t, &tt.policy)
+			if got := s.CanSend(tt.chatJID); got != tt.want {
+				t.Errorf("CanSend(%q) = %v, want %v", tt.chatJID, got, tt.want)
+			}
+		})
+	}
+}

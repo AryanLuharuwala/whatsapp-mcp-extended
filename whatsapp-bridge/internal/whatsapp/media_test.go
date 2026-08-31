@@ -71,8 +71,8 @@ func TestExtractTextContent(t *testing.T) {
 			wantText: "report.pdf",
 		},
 		{
-			name: "sticker",
-			msg:  &waE2E.Message{StickerMessage: &waE2E.StickerMessage{}},
+			name:     "sticker",
+			msg:      &waE2E.Message{StickerMessage: &waE2E.StickerMessage{}},
 			wantText: "[Sticker]",
 		},
 		{

@@ -34,24 +34,38 @@ def read_policy():
         p = json.loads(POLICY_PATH.read_text())
         if not isinstance(p, dict):
             raise ValueError
-        return {"mode": p.get("mode", "allowlist"), "jids": list(p.get("jids") or [])}
+        return {"mode": p.get("mode", "allowlist"),
+                "jids": list(p.get("jids") or []),
+                "send_jids": list(p.get("send_jids") or [])}
     except Exception:
         # No policy yet: propose an empty allowlist, which grants nothing.
-        return {"mode": "allowlist", "jids": []}
+        return {"mode": "allowlist", "jids": [], "send_jids": []}
 
 
-def write_policy(mode, jids):
-    if mode not in ("allowlist", "blocklist", "off"):
-        raise ValueError(f"invalid mode: {mode!r}")
-    clean, seen = [], set()
+def _clean(jids):
+    out, seen = [], set()
     for j in jids:
         j = str(j).strip()
-        if j and j not in seen:
-            seen.add(j)
-            clean.append(j)
+        if j and j.lower() not in seen:
+            seen.add(j.lower())
+            out.append(j)
+    return out
+
+
+def write_policy(mode, jids, send_jids=()):
+    if mode not in ("allowlist", "blocklist", "off"):
+        raise ValueError(f"invalid mode: {mode!r}")
+    clean = _clean(jids)
+    # Sending is a subset of reading. Drop any send entry the read policy does
+    # not cover, so the saved file cannot express "send somewhere unreadable"
+    # even if the request asked for it.
+    readable = {j.lower() for j in clean}
+    send_clean = [j for j in _clean(send_jids)
+                  if mode == "off" or j.lower() in readable]
     payload = {
         "mode": mode,
         "jids": clean,
+        "send_jids": send_clean,
         "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
     ACL_DIR.mkdir(parents=True, exist_ok=True)
@@ -114,11 +128,14 @@ class Handler(BaseHTTPRequestHandler):
             self._send(403, json.dumps({"error": "bad or missing token"}))
             return
         try:
-            saved = write_policy(body.get("mode", "allowlist"), body.get("jids") or [])
+            saved = write_policy(body.get("mode", "allowlist"),
+                                 body.get("jids") or [],
+                                 body.get("send_jids") or [])
         except Exception as e:
             self._send(400, json.dumps({"error": str(e)}))
             return
-        print(f"  policy saved: mode={saved['mode']} chats={len(saved['jids'])}")
+        print(f"  policy saved: mode={saved['mode']} readable={len(saved['jids'])} "
+              f"sendable={len(saved['send_jids'])}")
         self._send(200, json.dumps({"ok": True, "policy": saved}))
 
 
@@ -151,6 +168,9 @@ button.sec{background:transparent;color:var(--mut);border:1px solid var(--bd)}
 button:disabled{opacity:.5;cursor:default}
 .msg{font-size:13px}.msg.ok{color:var(--ok)}.msg.err{color:var(--danger)}
 .empty{color:var(--mut);padding:24px 4px;text-align:center}
+.snd{font-size:12px;color:var(--mut);display:flex;align-items:center;gap:4px;white-space:nowrap;min-width:60px}
+.snd.off{opacity:.35}
+.snd:has(input:checked){color:var(--warn);font-weight:500}
 code{background:var(--bg);border:1px solid var(--bd);border-radius:4px;padding:1px 5px;font-size:12px}
 </style></head><body><div class="wrap">
 <h1>WhatsApp Access Control</h1>
@@ -160,7 +180,8 @@ code{background:var(--bg);border:1px solid var(--bd);border-radius:4px;padding:1
 The model cannot edit this policy. It is written only from this page, stored outside
 the project directory the model can reach, and never exposed as a tool.
 Chats you exclude are dropped before they are written to disk, so they never exist
-for the model to read.
+for the model to read. Ticking <b>send</b> additionally lets the model message that
+chat; sending requires reading, so untick a chat and it can no longer be written to.
 </div></div>
 
 <div class="card">
@@ -187,7 +208,7 @@ for the model to read.
 </div>
 </div><script>
 const TOKEN="__TOKEN__";
-let chats=[],policy={mode:"allowlist",jids:[]},sel=new Set(),dirty=false;
+let chats=[],policy={mode:"allowlist",jids:[],send_jids:[]},sel=new Set(),snd=new Set(),dirty=false;
 const $=id=>document.getElementById(id);
 const key=j=>(j||"").toLowerCase();
 
@@ -216,19 +237,28 @@ function render(){
     else{readable=!on;}
     cls=readable?"y":"n";
     const label=readable?"readable":"hidden";
+    const canSend=snd.has(key(c.jid));
     return `<div class="row">
-      <input type="checkbox" data-jid="${c.jid}" ${on?"checked":""} ${mode==="off"?"disabled":""}>
+      <input type="checkbox" data-jid="${c.jid}" ${on?"checked":""} ${mode==="off"?"disabled":""} title="model may read">
       <div class="nm"><b>${(c.name||"(no name)").replace(/[<>&]/g,"")}</b><span>${c.jid}</span></div>
       ${c.is_group?'<span class="tag g">group</span>':'<span class="tag">direct</span>'}
-      <span class="st ${cls}">${label}</span></div>`;}).join("");
-  $("list").querySelectorAll("input[type=checkbox]").forEach(cb=>{
-    cb.onchange=()=>{const k=key(cb.dataset.jid);cb.checked?sel.add(k):sel.delete(k);setDirty(true);render();};});
+      <span class="st ${cls}">${label}</span>
+      <label class="snd ${readable?"":"off"}" title="${readable?"model may send here":"allow reading first"}">
+        <input type="checkbox" class="sendbox" data-jid="${c.jid}" ${canSend?"checked":""} ${readable?"":"disabled"}> send
+      </label></div>`;}).join("");
+  $("list").querySelectorAll("input[type=checkbox]:not(.sendbox)").forEach(cb=>{
+    cb.onchange=()=>{const k=key(cb.dataset.jid);
+      if(cb.checked){sel.add(k);}else{sel.delete(k);snd.delete(k);}  // unreadable implies unsendable
+      setDirty(true);render();};});
+  $("list").querySelectorAll("input.sendbox").forEach(cb=>{
+    cb.onchange=()=>{const k=key(cb.dataset.jid);cb.checked?snd.add(k):snd.delete(k);setDirty(true);render();};});
 }
 
 async function load(){
   const r=await fetch("/api/state");const s=await r.json();
   chats=s.chats||[];policy=s.policy||policy;
   sel=new Set((policy.jids||[]).map(key));
+  snd=new Set((policy.send_jids||[]).map(key));
   document.querySelectorAll("input[name=mode]").forEach(x=>x.checked=(x.value===policy.mode));
   setDirty(false);msg(chats.length?`${chats.length} chats known`:"","");
   render();
@@ -241,13 +271,15 @@ $("save").onclick=async()=>{
   const jids=chats.map(c=>c.jid).filter(j=>sel.has(key(j)));
   // keep any listed JID that is not in the roster yet
   (policy.jids||[]).forEach(j=>{if(sel.has(key(j))&&!jids.some(x=>key(x)===key(j)))jids.push(j);});
+  const send_jids=chats.map(c=>c.jid).filter(j=>snd.has(key(j)));
+  (policy.send_jids||[]).forEach(j=>{if(snd.has(key(j))&&!send_jids.some(x=>key(x)===key(j)))send_jids.push(j);});
   try{
     const r=await fetch("/api/policy",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({token:TOKEN,mode:policy.mode,jids})});
+      body:JSON.stringify({token:TOKEN,mode:policy.mode,jids,send_jids})});
     const d=await r.json();
     if(!r.ok)throw new Error(d.error||r.status);
     policy=d.policy;setDirty(false);
-    msg(`Saved - ${policy.mode}, ${policy.jids.length} chats. Bridge picks this up within ~2s.`,"ok");
+    msg(`Saved - ${policy.mode}, ${policy.jids.length} readable, ${(policy.send_jids||[]).length} sendable. Bridge picks this up within ~2s.`,"ok");
   }catch(e){msg("Save failed: "+e.message,"err");$("save").disabled=false;}
 };
 load();

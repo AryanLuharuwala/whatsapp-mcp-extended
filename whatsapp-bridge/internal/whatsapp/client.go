@@ -678,3 +678,21 @@ func (c *Client) noteChat(chatJID, name string, isGroup bool) {
 		c.acl.NoteChat(chatJID, name, isGroup)
 	}
 }
+
+// canSend reports whether the bridge may send to chatJID. The check lives here
+// rather than in the MCP tool surface so that it holds for every caller of the
+// bridge API, not only for a model whose toolset happens to exclude sending.
+func (c *Client) canSend(chatJID string) bool {
+	if c.acl != nil && c.acl.HasPolicyFile() {
+		return c.acl.CanSend(chatJID)
+	}
+	if c.cfg != nil && len(c.cfg.AllowlistJIDs) > 0 {
+		for _, a := range c.cfg.AllowlistJIDs {
+			if acl.MatchJID(a, chatJID) {
+				return true
+			}
+		}
+		return false
+	}
+	return true
+}
