@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -33,6 +34,14 @@ type Config struct {
 	// Safety gate: comma-separated list of allowed JIDs/phone numbers (WHATSAPP_ALLOWLIST_JIDS)
 	// If set, outgoing message sends to JIDs/numbers outside this allowlist are rejected.
 	AllowlistJIDs []string
+
+	// Ingest filter: decides which chats are persisted at all.
+	// WHATSAPP_INGEST_ALLOWLIST_JIDS stores only the listed chats;
+	// WHATSAPP_INGEST_BLOCKLIST_JIDS stores everything except the listed chats.
+	// Excluded chats are dropped before they reach the database, so they are
+	// never exposed to the MCP server. Allowlist wins if both are set.
+	IngestMode string
+	IngestJIDs []string
 }
 
 // NewConfig creates a new configuration with default values
@@ -131,5 +140,29 @@ func NewConfig() *Config {
 		}
 	}
 
+	ingestAllow := os.Getenv("WHATSAPP_INGEST_ALLOWLIST_JIDS")
+	ingestBlock := os.Getenv("WHATSAPP_INGEST_BLOCKLIST_JIDS")
+	switch {
+	case ingestAllow != "":
+		cfg.IngestMode = IngestModeAllowlist
+		cfg.IngestJIDs = splitJIDs(ingestAllow)
+	case ingestBlock != "":
+		cfg.IngestMode = IngestModeBlocklist
+		cfg.IngestJIDs = splitJIDs(ingestBlock)
+	default:
+		cfg.IngestMode = IngestModeOff
+	}
+
 	return cfg
+}
+
+// splitJIDs parses a comma-separated JID list, dropping empty entries.
+func splitJIDs(raw string) []string {
+	var out []string
+	for _, jid := range strings.Split(raw, ",") {
+		if trimmed := strings.TrimSpace(jid); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }

@@ -76,6 +76,35 @@ To restrict outgoing message delivery to a specified set of allowed contacts or 
 WHATSAPP_ALLOWLIST_JIDS=1234567890,9876543210@s.whatsapp.net,1203630123456789@g.us
 ```
 
+### Ingest Filter (which chats are stored at all)
+
+`WHATSAPP_ALLOWLIST_JIDS` gates *outgoing* messages. The ingest filter gates
+what is *read*: excluded chats are dropped in the bridge before they are
+written to SQLite, so they never reach the database and cannot be surfaced by
+the MCP server, an unexpected query, or a prompt-injected tool call.
+
+```bash
+# Store only these chats; everything else is discarded on arrival
+WHATSAPP_INGEST_ALLOWLIST_JIDS=1234567890,1203630123456789@g.us
+
+# ...or store everything except these chats
+WHATSAPP_INGEST_BLOCKLIST_JIDS=9876543210@s.whatsapp.net
+```
+
+Notes:
+
+- Entries may be a bare user part (`1234567890`) or a full JID
+  (`...@s.whatsapp.net`, `...@g.us`). Matching is exact on one of those two
+  forms; a pattern of `1555` will **not** match `91555`.
+- The filter applies to live messages and to history sync, so a backfill
+  cannot repopulate chats the live path drops.
+- Prefer the allowlist. A blocklist fails open for every new chat you are
+  added to, whereas an allowlist that is set but empty stores nothing.
+- If both variables are set, the allowlist takes precedence.
+- Filtering happens at ingest, not at read time. Chats excluded from an
+  already-populated database are not retroactively removed — delete
+  `store/messages.db` and re-sync to apply a new filter to existing history.
+
 ## MCP Tools
 
 Version `0.3.0` exposes the full curated MCP surface by default for compatibility. Users who want a leaner agent context can opt into smaller toolsets.

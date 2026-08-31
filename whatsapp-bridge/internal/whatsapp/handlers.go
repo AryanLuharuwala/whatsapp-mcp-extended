@@ -120,6 +120,14 @@ func (c *Client) GetChatName(messageStore *database.MessageStore, jid types.JID,
 func (c *Client) HandleMessage(messageStore *database.MessageStore, webhookManager interface{}, msg *events.Message) {
 	// Save message to database
 	chatJID := msg.Info.Chat.String()
+
+	// Ingest filter: drop excluded chats before anything is persisted, so that
+	// neither the message nor the chat metadata ever reaches the database.
+	if c.cfg != nil && !c.cfg.ShouldIngest(chatJID) {
+		c.logger.Debugf("Ingest filter: skipping message for excluded chat %s", chatJID)
+		return
+	}
+
 	sender := msg.Info.Sender.User
 
 	// Get appropriate chat name (pass nil for conversation since we don't have one for regular messages)
@@ -199,6 +207,13 @@ func (c *Client) HandleHistorySync(messageStore *database.MessageStore, historyS
 		}
 
 		chatJID := *conversation.ID
+
+		// Ingest filter: excluded chats are skipped during backfill too,
+		// otherwise history sync would repopulate what the live path drops.
+		if c.cfg != nil && !c.cfg.ShouldIngest(chatJID) {
+			c.logger.Debugf("Ingest filter: skipping history for excluded chat %s", chatJID)
+			continue
+		}
 
 		// Try to parse the JID
 		jid, err := types.ParseJID(chatJID)
