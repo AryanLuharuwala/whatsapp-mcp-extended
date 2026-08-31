@@ -60,7 +60,11 @@ def run_handler(payload):
         p = subprocess.run([HANDLER], input=json.dumps(payload), text=True,
                            env=env, capture_output=True, timeout=120)
         if p.returncode != 0:
-            log(f"  handler exit {p.returncode}: {(p.stderr or '').strip()[:200]}")
+            # Report both streams: a handler that fails often explains itself on
+            # stdout, and logging only stderr loses the reason entirely.
+            detail = " | ".join(x for x in ((p.stdout or "").strip(),
+                                            (p.stderr or "").strip()) if x)
+            log(f"  handler exit {p.returncode}: {detail[:300] or '(no output)'}")
         elif p.stdout.strip():
             log(f"  handler: {p.stdout.strip()[:200]}")
     except subprocess.TimeoutExpired:

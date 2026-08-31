@@ -8,7 +8,7 @@
 #            Developer > Server Settings.
 set -euo pipefail
 
-MODEL="${WA_MODEL:-google/gemma-4-12b-qat}"
+MODEL="${WA_MODEL:-google/gemma-4-e2b}"
 LMS="${LMS_URL:-http://localhost:1234}"
 BRIDGE="${BRIDGE_URL:-http://127.0.0.1:8080}"
 MODE="${WA_AGENT_MODE:-plain}"

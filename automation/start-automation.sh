@@ -5,7 +5,7 @@ set -euo pipefail
 set -a; . ~/.config/whatsapp-mcp/env; set +a
 
 export WHATSAPP_HOOK_HANDLER="${WHATSAPP_HOOK_HANDLER:-$HOME/whatsapp-mcp-extended/automation/handler.agent.sh}"
-export WA_MODEL="${WA_MODEL:-google/gemma-4-12b-qat}"
+export WA_MODEL="${WA_MODEL:-google/gemma-4-e2b}"
 export WA_AGENT_MODE="${WA_AGENT_MODE:-plain}"
 export WA_TRIGGER_PREFIX="${WA_TRIGGER_PREFIX:-}"
 
