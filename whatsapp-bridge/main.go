@@ -12,6 +12,7 @@ import (
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
+	"whatsapp-bridge/internal/acl"
 	"whatsapp-bridge/internal/antiban"
 	"whatsapp-bridge/internal/api"
 	"whatsapp-bridge/internal/config"
@@ -121,6 +122,26 @@ func main() {
 	if err != nil {
 		logger.Errorf("Failed to create WhatsApp client: %v", err)
 		os.Exit(1)
+	}
+
+	// Load the operator chat access policy. It lives outside the working tree
+	// so that a filesystem MCP server scoped to a project directory cannot read
+	// or edit it; the bridge only reads it, the control panel writes it.
+	aclDir := acl.DefaultDir()
+	aclStore, err := acl.New(aclDir)
+	if err != nil {
+		logger.Errorf("Failed to initialize access policy store at %s: %v", aclDir, err)
+		os.Exit(1)
+	}
+	client.SetACLStore(aclStore)
+	aclDone := make(chan struct{})
+	go aclStore.Run(aclDone)
+	defer close(aclDone)
+	if aclStore.HasPolicyFile() {
+		p := aclStore.Policy()
+		logger.Infof("Access policy: %s with %d chat(s) from %s", p.Mode, len(p.JIDs), aclDir)
+	} else {
+		logger.Warnf("Access policy: no access.json in %s - every chat will be stored", aclDir)
 	}
 
 	// Initialize webhook manager

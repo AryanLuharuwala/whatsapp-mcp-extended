@@ -105,6 +105,31 @@ Notes:
   already-populated database are not retroactively removed — delete
   `store/messages.db` and re-sync to apply a new filter to existing history.
 
+### Control Panel (operator-only access policy)
+
+The env vars above are fine for a fixed setup. For day-to-day control there is
+a small local panel that lists every chat the bridge has seen and lets you tick
+which ones the model may read:
+
+```bash
+python3 control-panel/panel.py     # http://127.0.0.1:8770
+```
+
+It writes `~/.config/whatsapp-mcp/access.json`, which the bridge re-reads within
+about two seconds. That file takes precedence over the environment variables.
+
+The panel is the only writer. The model cannot change the policy:
+
+- the policy lives in `~/.config/whatsapp-mcp/`, outside any project directory
+  exposed through an MCP filesystem server, so no file tool can reach it;
+- every change is a `POST` carrying a token minted for that run of the panel, so
+  a model whose web tool only performs `GET` cannot alter it by visiting a URL;
+- the panel is never registered as an MCP server, so no tool call reaches it.
+
+The bridge keeps a roster (`roster.json`) of chats it has seen, so the panel can
+offer a conversation before you have allowed it. The roster holds a name, a JID
+and a timestamp - never message content.
+
 ## MCP Tools
 
 Version `0.3.0` exposes the full curated MCP surface by default for compatibility. Users who want a leaner agent context can opt into smaller toolsets.

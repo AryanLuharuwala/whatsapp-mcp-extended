@@ -21,6 +21,7 @@ import (
 	waLog "go.mau.fi/whatsmeow/util/log"
 	"google.golang.org/protobuf/proto"
 
+	"whatsapp-bridge/internal/acl"
 	"whatsapp-bridge/internal/antiban"
 	"whatsapp-bridge/internal/config"
 	localTypes "whatsapp-bridge/internal/types"
@@ -32,6 +33,10 @@ type Client struct {
 	*whatsmeow.Client
 	logger waLog.Logger
 	cfg    *config.Config
+
+	// acl is the operator-controlled chat access policy. When set it overrides
+	// the environment-based ingest filter in cfg.
+	acl *acl.Store
 
 	// Connection state tracking
 	connMu              sync.RWMutex
@@ -646,4 +651,30 @@ func (c *Client) HandlePairingError(err error) {
 // Antiban returns the anti-ban send interceptor.
 func (c *Client) Antiban() *antiban.SendInterceptor {
 	return c.antiban
+}
+
+// SetACLStore installs the operator access policy. The bridge only reads this
+// policy; it is written exclusively by the control panel.
+func (c *Client) SetACLStore(store *acl.Store) {
+	c.acl = store
+}
+
+// shouldIngest reports whether a chat's messages may be persisted, preferring
+// the operator policy file and falling back to environment configuration.
+func (c *Client) shouldIngest(chatJID string) bool {
+	if c.acl != nil && c.acl.HasPolicyFile() {
+		return c.acl.Allowed(chatJID)
+	}
+	if c.cfg != nil {
+		return c.cfg.ShouldIngest(chatJID)
+	}
+	return true
+}
+
+// noteChat records a conversation in the roster so the control panel can list
+// it even when the policy currently excludes it.
+func (c *Client) noteChat(chatJID, name string, isGroup bool) {
+	if c.acl != nil {
+		c.acl.NoteChat(chatJID, name, isGroup)
+	}
 }

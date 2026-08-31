@@ -120,18 +120,21 @@ func (c *Client) GetChatName(messageStore *database.MessageStore, jid types.JID,
 func (c *Client) HandleMessage(messageStore *database.MessageStore, webhookManager interface{}, msg *events.Message) {
 	// Save message to database
 	chatJID := msg.Info.Chat.String()
-
-	// Ingest filter: drop excluded chats before anything is persisted, so that
-	// neither the message nor the chat metadata ever reaches the database.
-	if c.cfg != nil && !c.cfg.ShouldIngest(chatJID) {
-		c.logger.Debugf("Ingest filter: skipping message for excluded chat %s", chatJID)
-		return
-	}
-
 	sender := msg.Info.Sender.User
 
 	// Get appropriate chat name (pass nil for conversation since we don't have one for regular messages)
 	name := c.GetChatName(messageStore, msg.Info.Chat, chatJID, nil, sender)
+
+	// Record the conversation in the roster before filtering, so the control
+	// panel can offer chats the policy currently excludes. Metadata only.
+	c.noteChat(chatJID, name, msg.Info.Chat.Server == "g.us")
+
+	// Access policy: drop excluded chats before anything is persisted, so that
+	// neither the message nor the chat metadata ever reaches the database.
+	if !c.shouldIngest(chatJID) {
+		c.logger.Debugf("Access policy: skipping message for excluded chat %s", chatJID)
+		return
+	}
 
 	// Update chat in database with the message timestamp (keeps last message time updated)
 	err := messageStore.StoreChat(chatJID, name, msg.Info.Timestamp)
@@ -208,13 +211,6 @@ func (c *Client) HandleHistorySync(messageStore *database.MessageStore, historyS
 
 		chatJID := *conversation.ID
 
-		// Ingest filter: excluded chats are skipped during backfill too,
-		// otherwise history sync would repopulate what the live path drops.
-		if c.cfg != nil && !c.cfg.ShouldIngest(chatJID) {
-			c.logger.Debugf("Ingest filter: skipping history for excluded chat %s", chatJID)
-			continue
-		}
-
 		// Try to parse the JID
 		jid, err := types.ParseJID(chatJID)
 		if err != nil {
@@ -224,6 +220,16 @@ func (c *Client) HandleHistorySync(messageStore *database.MessageStore, historyS
 
 		// Get appropriate chat name by passing the history sync conversation directly
 		name := c.GetChatName(messageStore, jid, chatJID, conversation, "")
+
+		// Record the conversation in the roster before filtering. Metadata only.
+		c.noteChat(chatJID, name, jid.Server == "g.us")
+
+		// Access policy: excluded chats are skipped during backfill too,
+		// otherwise history sync would repopulate what the live path drops.
+		if !c.shouldIngest(chatJID) {
+			c.logger.Debugf("Access policy: skipping history for excluded chat %s", chatJID)
+			continue
+		}
 
 		messages := conversation.Messages
 		if len(messages) > 0 {
