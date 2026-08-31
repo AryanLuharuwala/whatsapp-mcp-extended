@@ -86,8 +86,17 @@ func ValidateWebhookURL(webhookURL string) error {
 		return fmt.Errorf("failed to resolve webhook URL hostname: %v", err)
 	}
 
+	// A webhook delivered to this machine is the normal way to drive local
+	// automation, but it is still SSRF if anything else can reach it. Allow
+	// loopback only, and only when the operator asks for it: link-local stays
+	// blocked so the cloud metadata endpoint cannot be reached this way.
+	allowLoopback := os.Getenv("WEBHOOK_ALLOW_LOOPBACK") == "true"
+
 	// Check all resolved IPs
 	for _, ip := range ips {
+		if allowLoopback && ip.IsLoopback() {
+			continue
+		}
 		if isPrivateIP(ip) {
 			return fmt.Errorf("webhook URL resolves to private/reserved IP: %s -> %s", hostname, ip.String())
 		}
