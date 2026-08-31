@@ -15,6 +15,7 @@ Deliberate properties:
 
 import json
 import os
+import sqlite3
 import secrets
 import sys
 import webbrowser
@@ -76,12 +77,75 @@ def write_policy(mode, jids, send_jids=()):
     return payload
 
 
+# The bridge stores a chat name only when WhatsApp supplied one, so many direct
+# chats arrive as bare numbers - especially @lid identities, which carry no phone
+# number at all. whatsmeow already holds the address book and the lid -> phone
+# mapping in its own database, so resolve names for display by joining the two.
+WA_DB = Path(os.environ.get(
+    "WHATSAPP_STORE_DB",
+    Path.home() / "whatsapp-mcp-extended" / "store" / "whatsapp.db"))
+
+
+def load_contacts():
+    """Return (names_by_phone, phone_by_lid) read from whatsmeow's store."""
+    names, lids = {}, {}
+    if not WA_DB.exists():
+        return names, lids
+    try:
+        con = sqlite3.connect(f"file:{WA_DB}?mode=ro", uri=True)
+    except Exception:
+        return names, lids
+    try:
+        for jid, first, full, push, biz in con.execute(
+                "select their_jid, first_name, full_name, push_name, business_name "
+                "from whatsmeow_contacts"):
+            user = (jid or "").split("@")[0].split(":")[0]
+            # Prefer the name the user chose in their address book over the
+            # display name the contact set for themselves.
+            name = next((n for n in (full, first, push, biz) if n and n.strip()), None)
+            if user and name and user not in names:
+                names[user] = name.strip()
+        for lid, pn in con.execute("select lid, pn from whatsmeow_lid_map"):
+            if lid and pn:
+                lids[str(lid).split("@")[0]] = str(pn).split("@")[0]
+    except Exception:
+        pass
+    finally:
+        con.close()
+    return names, lids
+
+
+def resolve_name(chat, names, lids):
+    """Best available display name, plus the phone number when one is known."""
+    jid = chat.get("jid", "")
+    user = jid.split("@")[0].split(":")[0]
+    phone = lids.get(user, user) if jid.endswith("@lid") else user
+
+    current = (chat.get("name") or "").strip()
+    # A "name" that is just the identifier carries no information.
+    if current and current not in (user, phone) and not current.isdigit():
+        return current, phone
+    return names.get(phone) or names.get(user) or "", phone
+
+
 def read_roster():
     try:
         data = json.loads(ROSTER_PATH.read_text())
-        return data if isinstance(data, list) else []
+        if not isinstance(data, list):
+            return []
     except Exception:
         return []
+    names, lids = load_contacts()
+    for c in data:
+        if not isinstance(c, dict) or c.get("is_group"):
+            continue
+        name, phone = resolve_name(c, names, lids)
+        # Blank the name when nothing real is known, so the interface can say
+        # "unknown contact" and show the number, rather than presenting the
+        # identifier as if it were a name.
+        c["name"] = name
+        c["phone"] = phone
+    return data
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -224,7 +288,7 @@ function render(){
   const q=$("q").value.trim().toLowerCase();
   const mode=policy.mode;
   $("modeHint").textContent=HINTS[mode]||"";
-  const shown=chats.filter(c=>!q||(c.name||"").toLowerCase().includes(q)||(c.jid||"").toLowerCase().includes(q));
+  const shown=chats.filter(c=>!q||(c.name||"").toLowerCase().includes(q)||(c.jid||"").toLowerCase().includes(q)||(c.phone||"").includes(q));
   if(!chats.length){
     $("list").innerHTML='<div class="empty">No chats seen yet.<br>Start the bridge and let a message arrive, then press Reload.</div>';
     return;}
@@ -240,7 +304,7 @@ function render(){
     const canSend=snd.has(key(c.jid));
     return `<div class="row">
       <input type="checkbox" data-jid="${c.jid}" ${on?"checked":""} ${mode==="off"?"disabled":""} title="model may read">
-      <div class="nm"><b>${(c.name||"(no name)").replace(/[<>&]/g,"")}</b><span>${c.jid}</span></div>
+      <div class="nm"><b>${(c.name||"(unknown contact)").replace(/[<>&]/g,"")}</b><span>${c.phone&&c.phone!==c.jid.split("@")[0]?"+"+c.phone+" &middot; ":""}${c.jid}</span></div>
       ${c.is_group?'<span class="tag g">group</span>':'<span class="tag">direct</span>'}
       <span class="st ${cls}">${label}</span>
       <label class="snd ${readable?"":"off"}" title="${readable?"model may send here":"allow reading first"}">
@@ -260,7 +324,8 @@ async function load(){
   sel=new Set((policy.jids||[]).map(key));
   snd=new Set((policy.send_jids||[]).map(key));
   document.querySelectorAll("input[name=mode]").forEach(x=>x.checked=(x.value===policy.mode));
-  setDirty(false);msg(chats.length?`${chats.length} chats known`:"","");
+  const named=chats.filter(c=>c.name&&c.name!=="").length;
+  setDirty(false);msg(chats.length?`${chats.length} chats known, ${named} with names`:"","");
   render();
 }
 document.querySelectorAll("input[name=mode]").forEach(x=>x.onchange=()=>{policy.mode=x.value;setDirty(true);render();});

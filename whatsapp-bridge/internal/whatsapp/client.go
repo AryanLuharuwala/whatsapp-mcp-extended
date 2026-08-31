@@ -659,11 +659,53 @@ func (c *Client) SetACLStore(store *acl.Store) {
 	c.acl = store
 }
 
+// policyAliases returns the forms a chat may legitimately be named by.
+//
+// WhatsApp addresses the same person as both a phone JID and a @lid identity,
+// and which one arrives varies by conversation. Matching only the literal JID
+// would let a chat the operator allowed by number slip through when it arrives
+// as a LID, so both directions of the mapping are resolved and either form is
+// accepted.
+func (c *Client) policyAliases(chatJID string) []string {
+	aliases := []string{chatJID}
+	jid, err := types.ParseJID(chatJID)
+	if err != nil || c.Client == nil || c.Client.Store == nil || c.Client.Store.LIDs == nil {
+		return aliases
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	var other types.JID
+	switch jid.Server {
+	case types.HiddenUserServer:
+		other, err = c.Client.Store.LIDs.GetPNForLID(ctx, jid)
+	case types.DefaultUserServer:
+		other, err = c.Client.Store.LIDs.GetLIDForPN(ctx, jid)
+	default:
+		return aliases
+	}
+	if err == nil && !other.IsEmpty() {
+		aliases = append(aliases, other.String())
+	}
+	return aliases
+}
+
 // shouldIngest reports whether a chat's messages may be persisted, preferring
 // the operator policy file and falling back to environment configuration.
 func (c *Client) shouldIngest(chatJID string) bool {
+	for _, alias := range c.policyAliases(chatJID) {
+		if c.acl != nil && c.acl.HasPolicyFile() {
+			if c.acl.Allowed(alias) {
+				return true
+			}
+		} else if c.cfg != nil && c.cfg.ShouldIngest(alias) {
+			return true
+		}
+	}
+	// A blocklist must reject on every alias, so re-check the primary form: the
+	// loop above answers "is any alias allowed", which for a blocklist is only
+	// correct once the literal JID has also been tested.
 	if c.acl != nil && c.acl.HasPolicyFile() {
-		return c.acl.Allowed(chatJID)
+		return false
 	}
 	if c.cfg != nil {
 		return c.cfg.ShouldIngest(chatJID)
@@ -684,7 +726,12 @@ func (c *Client) noteChat(chatJID, name string, isGroup bool) {
 // bridge API, not only for a model whose toolset happens to exclude sending.
 func (c *Client) canSend(chatJID string) bool {
 	if c.acl != nil && c.acl.HasPolicyFile() {
-		return c.acl.CanSend(chatJID)
+		for _, alias := range c.policyAliases(chatJID) {
+			if c.acl.CanSend(alias) {
+				return true
+			}
+		}
+		return false
 	}
 	if c.cfg != nil && len(c.cfg.AllowlistJIDs) > 0 {
 		for _, a := range c.cfg.AllowlistJIDs {
