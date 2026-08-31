@@ -107,38 +107,19 @@ Notes:
 
 ### Control Panel (operator-only access policy)
 
-The env vars above are fine for a fixed setup. For day-to-day control there is
-a small local panel that lists every chat the bridge has seen and lets you tick
-which ones the model may read:
+The env vars above are fine for a fixed setup. For day-to-day control there is a
+separate operator UI that lists every chat the bridge has seen and lets you pick
+which ones a model may read and which it may message. It writes
+`~/.config/whatsapp-mcp/access.json`, which this bridge re-reads within about two
+seconds and which takes precedence over the environment variables.
 
-```bash
-python3 control-panel/panel.py     # http://127.0.0.1:8770
-```
+That panel, the webhook automation and the tooling around them live outside this
+fork, so that what remains here is only the bridge itself:
 
-It writes `~/.config/whatsapp-mcp/access.json`, which the bridge re-reads within
-about two seconds. That file takes precedence over the environment variables.
+    https://github.com/AryanLuharuwala/agent-stack
 
-The panel is the only writer. The model cannot change the policy:
-
-- the policy lives in `~/.config/whatsapp-mcp/`, outside any project directory
-  exposed through an MCP filesystem server, so no file tool can reach it;
-- every change is a `POST` carrying a token minted for that run of the panel, so
-  a model whose web tool only performs `GET` cannot alter it by visiting a URL;
-- the panel is never registered as an MCP server, so no tool call reaches it.
-
-Each chat has two independent permissions: **read** and **send**. Sending is a
-strictly narrower privilege - a chat must be readable to be sendable - so
-removing read access also removes the ability to message there, and the send
-list can never widen access on its own. The panel enforces this when saving and
-the bridge enforces it again when sending.
-
-The send gate lives in the bridge, in `SendMessage`, `SendReaction` and
-`CreatePoll`, rather than in the MCP tool surface. A caller that reaches the
-bridge API directly is refused just the same.
-
-The bridge keeps a roster (`roster.json`) of chats it has seen, so the panel can
-offer a conversation before you have allowed it. The roster holds a name, a JID
-and a timestamp - never message content.
+Each chat carries two permissions, read and send. Sending requires reading, so
+removing read access also removes the ability to message there.
 
 ## MCP Tools
 
