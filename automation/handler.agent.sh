@@ -14,13 +14,27 @@ BRIDGE="${BRIDGE_URL:-http://127.0.0.1:8080}"
 MODE="${WA_AGENT_MODE:-plain}"
 TRIGGER="${WA_TRIGGER_PREFIX:-}"
 
-# Never answer yourself; without this the reply is itself a trigger.
-[ "${WA_IS_FROM_ME:-0}" = "1" ] && exit 0
 [ -z "${WA_CONTENT:-}" ] && exit 0
+
 # Optional prefix gate, so not every message wakes the model.
 if [ -n "$TRIGGER" ]; then
   case "$WA_CONTENT" in "$TRIGGER"*) ;; *) exit 0 ;; esac
 fi
+
+# Answering your own messages risks a loop, because the reply is also from you.
+# A trigger prefix breaks that: the reply never starts with it, so it cannot
+# re-trigger. Without a prefix there is nothing to stop the cycle, so refuse.
+if [ "${WA_IS_FROM_ME:-0}" = "1" ] && [ -z "$TRIGGER" ]; then
+  exit 0
+fi
+
+# Strip the prefix so the model is not asked to interpret "!bot".
+PROMPT="$WA_CONTENT"
+if [ -n "$TRIGGER" ]; then
+  PROMPT="${WA_CONTENT#"$TRIGGER"}"
+  PROMPT="${PROMPT# }"
+fi
+[ -z "$PROMPT" ] && exit 0
 
 # jq -n --arg keeps the message as data. It is attacker-controlled text and
 # must never be interpolated into JSON or a shell command by hand.
@@ -30,10 +44,10 @@ fi
 BUDGET="${WA_MAX_TOKENS:-800}"
 
 if [ "$MODE" = "tools" ]; then
-  REQ=$(jq -n --arg m "$MODEL" --arg i "$WA_CONTENT" --argjson b "$BUDGET" \
+  REQ=$(jq -n --arg m "$MODEL" --arg i "$PROMPT" --argjson b "$BUDGET" \
     '{model:$m, input:$i, max_output_tokens:$b, integrations:["mcp/whatsapp"]}')
 else
-  REQ=$(jq -n --arg m "$MODEL" --arg i "$WA_CONTENT" --argjson b "$BUDGET" \
+  REQ=$(jq -n --arg m "$MODEL" --arg i "$PROMPT" --argjson b "$BUDGET" \
     '{model:$m, input:$i, max_output_tokens:$b}')
 fi
 
